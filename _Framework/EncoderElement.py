@@ -18,13 +18,11 @@ def _not_implemented(value):
 
 
 _map_modes = map_modes = Live.MidiMap.MapMode
-ENCODER_VALUE_NORMALIZER = {(_map_modes.relative_smooth_two_compliment): (lambda v:                                               if v <= 64:
-v # Avoid dead code: v - 128), 
- 
- (_map_modes.relative_smooth_signed_bit): (lambda v:                                           if v <= 64:
-v # Avoid dead code: 64 - v), 
- 
- (_map_modes.relative_smooth_binary_offset): (lambda v: v - 64)}
+ENCODER_VALUE_NORMALIZER = {
+    _map_modes.relative_smooth_two_compliment: lambda v: v if v <= 64 else v - 128,
+    _map_modes.relative_smooth_signed_bit: lambda v: v if v <= 64 else 64 - v,
+    _map_modes.relative_smooth_binary_offset: lambda v: v - 64,
+}
 MAX_14_BIT_CC = 95
 
 class EncoderElement(InputControlElement):
@@ -46,6 +44,10 @@ class EncoderElement(InputControlElement):
             self._EncoderElement__map_mode = map_mode
         self._EncoderElement__value_normalizer = ENCODER_VALUE_NORMALIZER.get(map_mode, _not_implemented)
 
+        # Memory for the EMA filter for shaky encoders
+        self._ema_value = 0.0
+        self._ema_alpha = 0.4 
+
     def message_map_mode(self):
         return self._EncoderElement__map_mode
 
@@ -56,9 +58,22 @@ class EncoderElement(InputControlElement):
         return old_div(self.relative_value_to_delta(value), 64.0) * self.encoder_sensitivity
 
     def notify_value(self, value):
-        super(EncoderElement, self).notify_value(value)
+        # EMA filter for shaky encoders
+        self._ema_value = (self._ema_alpha * value) + ((1.0 - self._ema_alpha) * self._ema_value)
+        
+        if abs(self._ema_value) > 0.3:
+            # if accumulated value > activation threshold push the filtered value
+            if self._ema_value > 0:
+                filtered_value = 1
+            else:
+                filtered_value = 127
+                
+            # Reset value after notification
+            self._ema_value = 0.0
+
+        super(EncoderElement, self).notify_value(filtered_value)
         if self.normalized_value_listener_count():
-            self.notify_normalized_value(self.normalize_value(value))
+            self.notify_normalized_value(self.normalize_value(filtered_value))
 
 
 class TouchEncoderElementBase(EncoderElement):
